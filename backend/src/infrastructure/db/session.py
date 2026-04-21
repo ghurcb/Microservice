@@ -1,0 +1,33 @@
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
+
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+
+from src.infrastructure.db.config import get_database_url
+
+
+database_url: str = get_database_url()
+async_database_url = database_url.replace("postgresql://", "postgresql+asyncpg://")
+
+# Создание async движка
+engine = create_async_engine(async_database_url, pool_pre_ping=True)
+
+# Factory для создания сессий
+AsyncSessionLocal = async_sessionmaker(bind=engine, autocommit=False, autoflush=False, class_=AsyncSession)
+
+# Context manager для безопасной работы с сессиями
+@asynccontextmanager
+async def get_async_session() -> AsyncIterator[AsyncSession]:
+    session = AsyncSessionLocal()
+    try:
+        yield session
+        await session.commit() # Коммит при успехе
+    except Exception:
+        await session.rollback() # Откат при ошибке
+        raise
+    finally:
+        await session.close()
+
+

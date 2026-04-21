@@ -1,0 +1,105 @@
+version: '3.9'
+
+services:
+  # === БД ===
+  db-main:
+    image: postgres:16-alpine
+    container_name: db-main
+    environment:
+      POSTGRES_USER: ${DB_MAIN_USER:-app}
+      POSTGRES_PASSWORD: ${DB_MAIN_PASSWORD:-app}
+      POSTGRES_DB: ${DB_MAIN_NAME:-app}
+    volumes:
+      - db_main_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_MAIN_USER:-app} -d ${DB_MAIN_NAME:-app}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - microservices-network
+    expose:
+      - "5432"
+
+  db-users:
+    image: postgres:16-alpine
+    container_name: db-users
+    environment:
+      POSTGRES_USER: ${DB_USERS_USER:-app}
+      POSTGRES_PASSWORD: ${DB_USERS_PASSWORD:-app}
+      POSTGRES_DB: ${DB_USERS_NAME:-users_db}
+    volumes:
+      - db_users_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERS_USER:-app} -d ${DB_USERS_NAME:-users_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - microservices-network
+    expose:
+      - "5432"
+
+  # === Микросервисы ===
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: backend
+    environment:
+      ASYNC_DATABASE_URL: postgresql+asyncpg://${DB_MAIN_USER:-app}:${DB_MAIN_PASSWORD:-app}@db-main:5432/${DB_MAIN_NAME:-app}
+      JWT_SECRET: ${JWT_SECRET:-your-secret-key-keep-it-safe}
+      SERVICE_NAME: backend
+    expose:
+      - "8000"
+    depends_on:
+      db-main:
+        condition: service_healthy
+    networks:
+      - microservices-network
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/alembic:/app/alembic
+
+  users-api:
+    build:
+      context: ./users
+      dockerfile: Dockerfile
+    container_name: users-api
+    environment:
+      ASYNC_DATABASE_URL: postgresql+asyncpg://${DB_USERS_USER:-app}:${DB_USERS_PASSWORD:-app}@db-users:5432/${DB_USERS_NAME:-users_db}
+      JWT_SECRET: ${JWT_SECRET:-your-secret-key-keep-it-safe}
+      SERVICE_NAME: users-api
+    expose:
+      - "8001"
+    depends_on:
+      db-users:
+        condition: service_healthy
+    networks:
+      - microservices-network
+    volumes:
+      - ./users/src:/app/src
+      - ./users/alembic:/app/alembic
+
+  # === API Gateway ===
+  api-gateway:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    container_name: api-gateway
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - backend
+      - users-api
+    networks:
+      - microservices-network
+
+volumes:
+  db_main_data:
+  db_users_data:
+
+networks:
+  microservices-network:
+    driver: bridge
